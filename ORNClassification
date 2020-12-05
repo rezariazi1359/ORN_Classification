@@ -1,0 +1,301 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# ### Load Utility Functions
+
+# In[1]:
+
+
+from utility import *
+
+
+# ### Load Dataframe
+
+# In[2]:
+
+
+df = pd.read_csv('ORN_RobustScaler.csv', index_col = 'Unnamed: 0')
+df = df.drop_duplicates()
+df.iloc[:,-21:-3] = df.iloc[:,-21:-3].astype('category')
+df.shape 
+
+
+# In[3]:
+
+
+df['Ds Site'].value_counts()
+
+
+# In[4]:
+
+
+df = df.drop(['Ds Site'], axis = 1)
+
+
+# In[26]:
+
+
+df['target'].value_counts()
+
+
+# In[64]:
+
+
+# Uncomment to evaluate the whole process with random label
+# df['target'] = np.random.choice([0, 1], size=df.shape[0])
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+from sklearn.utils.random import sample_without_replacement as rsm
+
+radiomics = pd.DataFrame(columns=['fpr','tpr','auc', 'auc_train'])
+clinic = pd.DataFrame(columns=['fpr','tpr','auc','auc_train'])
+radioclinic = pd.DataFrame(columns=['fpr','tpr','auc','auc_train'])
+
+feat_mrmr =[]
+
+for i in range(100):
+    
+    print(f'round {i} is started!')    
+    train, test = train_test_split(df.iloc[rsm(len(df),len(df)*0.80)], test_size=0.20)
+    train = under_sampling(train,'target')   
+    print(f'Train: {train.shape[0]}, Test: {test.shape[0]}')
+    
+
+    #Radiomics Model
+    feat = mrmr.mrmr_ensemble(features=train.iloc[:,:-21],
+                              targets=pd.DataFrame(train['target']),
+                              solution_length=15)[0][0]
+    feat_mrmr.append(feature_class(feat)[1])
+    
+    model_radiomics,train_auc_radiomics  = train_model(train[feat],train['target'])
+        
+    
+    # For clinic features
+    train_clinic = train.iloc[:,-21:-3]
+    test_clinic = test.iloc[:,-21:-3]
+    print(f'Train_clinic: {train_clinic.shape[0]}, Test_clinic: {test_clinic.shape[0]}')
+    model_clinic, train_auc_clinic  = train_model(train_clinic,train['target'])  
+    
+    # For radioclinic features
+    train_radioclinic = train[train.iloc[:,-21:-3].columns.tolist() + feat]
+    test_radioclinic = test[test.iloc[:,-21:-3].columns.tolist() + feat]    
+    print(f'Train_radioclinic: {train_radioclinic.shape[0]}, Test_radiocinic: {test_radioclinic.shape[0]}') 
+    model_radioclinic,train_auc_radioclinic = train_model(train_radioclinic,train['target'])
+
+    
+    #Testing
+    print('Testing ...')
+    
+    fpr,tpr,auc = test_model(model_radiomics, test[feat],test['target'])
+    radiomics = radiomics.append({'fpr':fpr,'tpr':tpr,'auc':auc, 'auc_train':train_auc_radiomics}, ignore_index=True)
+    
+    fpr,tpr,auc = test_model(model_clinic, test_clinic,test['target'])
+    clinic = clinic.append({'fpr':fpr,'tpr':tpr,'auc':auc, 'auc_train':train_auc_clinic}, ignore_index=True)
+    
+    fpr,tpr,auc = test_model(model_radioclinic, test_radioclinic,test['target'])
+    radioclinic = radioclinic.append({'fpr':fpr,'tpr':tpr,'auc':auc, 'auc_train':train_auc_radioclinic}, ignore_index=True)
+    
+    
+    
+    print(f' round {i} is completed!')
+    print('------------------')
+                
+        
+print('finished!')
+
+
+# In[ ]:
+
+
+files =  ['radiomics', 'clinic', 'radioclinic'] 
+names = ['Radiomics', 'Clinic', 'Radiomics+Clinic']
+
+fig, ax = plt.subplots(figsize = (15,15))
+
+tprs = []
+aucs = []
+mean_fpr = np.linspace(0, 1, 10)
+
+for file,name in zip(files,names):
+    mean_tpr, mean_fpr, mean_auc, std_auc ,tprs= calc_avg_values(eval(file))
+    ax.plot(mean_fpr, mean_tpr,label=r'%s (%0.2f $\pm$ %0.2f)' % (name,mean_auc, std_auc),lw=2, alpha=.8)
+#     std_tpr = np.std(tprs, axis=0)
+#     tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+#     tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+#     ax.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=.2)
+    
+plt.plot([0, 1], [0, 1], linestyle='--', lw=2, color='r', alpha=.8)    
+# plt.xticks(np.arange(0.0, 1.1, step=0.1))
+plt.xticks([])
+# plt.xlabel("Flase Positive Rate", fontsize=20)
+# plt.yticks(np.arange(0.0, 1.1, step=0.1))
+plt.yticks([])
+# plt.ylabel("True Positive Rate", fontsize=20)
+# plt.title('All Features', fontweight='bold', fontsize=20)
+plt.legend(prop={'size':15}, loc='lower right')   
+plt.show()
+# plt.savefig('/results/Figur10(left).png')
+
+
+# In[ ]:
+
+
+# inner{“box”, “quartile”, “point”, “stick”, None},
+# def plotting(acc_mrmr,acc_mrmr_robust,low_rng,ylabel,x_label, inner, type1,type2):
+
+
+files_1 =  [ 'radioclinic','radiomics', 'clinic'] 
+col = ['Radiomics+Clinic','Radiomics', 'Clinic' ]
+auc1 = pd.DataFrame()
+auc2 = pd.DataFrame()
+for file in files_1:
+    auc1 = auc1.append(round(eval(file)['auc'],2))
+
+
+auc1.index = col
+auc1 = auc1.T
+auc1 = auc1.melt()
+auc1.rename(columns = {'variable': 'Models', 'value': 'AUC values'}, inplace = True)
+  
+
+sns.violinplot(x="Models", y="AUC values", data=auc1)
+plt.axis([-1,3,0,1.18])
+plt.xlabel('') 
+
+
+# In[68]:
+
+
+filters =['shape','Original','wavelet','exponential','logarithm','gradient','logsigma','lbp','square','squareroot',
+          'Original','wavelet','exponential','logarithm','gradient','logsigma','lbp','square','squareroot','Original',
+          'wavelet','exponential','logarithm','gradient','logsigma','lbp','square','squareroot','Original','wavelet',
+          'exponential','logarithm','gradient','logsigma','lbp','square','squareroot','Original','wavelet','exponential',
+          'logarithm','gradient','logsigma','lbp','square','squareroot','Original','wavelet','exponential','logarithm',
+          'gradient','logsigma','lbp','square','squareroot']
+
+
+# In[69]:
+
+
+filters = ['shape'] + 6*['Original','wavelet','exponential','logarithm','gradient','logsigma','lbp','square','squareroot']
+
+featureGroup = ['shape','firstorder','firstorder_wavelet','firstorder_exponential','firstorder_logarithm','firstorder_gradient',
+                'firstorder_logsigma','firstorder_lbp','firstorder_square','firstorder_squareroot','glcm','glcm_wavelet',
+                'glcm_exponential','glcm_logarithm','glcm_gradient','glcm_logsigma','glcm_lbp','glcm_square','glcm_squareroot',
+                'gldm','gldm_wavelet','gldm_exponential','gldm_logarithm','gldm_gradient','gldm_logsigma','gldm_lbp','gldm_square',
+                'gldm_squareroot','glrlm','glrlm_wavelet','glrlm_exponential','glrlm_logarithm','glrlm_gradient','glrlm_logsigma',
+                'glrlm_lbp','glrlm_square','glrlm_squareroot','glszm','glszm_wavelet','glszm_exponential','glszm_logarithm','glszm_gradient',
+                'glszm_logsigma','glszm_lbp','glszm_square','glszm_squareroot','ngtdm','ngtdm_wavelet','ngtdm_exponential',
+                'ngtdm_logarithm','ngtdm_gradient','ngtdm_logsigma','ngtdm_lbp','ngtdm_square','ngtdm_squareroot']
+
+fclass = 1*['Shape']+9*['FO']+ 9*['GLCM']+ 9*['GLDM']+9*['GLRLM']+9*['GLSZM']+9*['NGTDM']
+
+
+# In[70]:
+
+
+selected_feat = pd.DataFrame(feat_mrmr, columns = featureGroup).T
+selected_feat['fclass'] = fclass
+selected_feat['flname']  = filters
+fselected_feat = selected_feat.drop(['flname'],axis = 1).groupby(['fclass']).sum()
+flselected_feat = selected_feat.drop(['fclass'],axis = 1).drop(['shape'],axis = 0).groupby(['flname']).sum()
+
+
+# In[ ]:
+
+
+# Set styles
+plt.style.use(['seaborn-paper', 'seaborn-whitegrid'])
+plt.style.use(['seaborn'])
+sns.set(palette='deep')
+plt.rc("font", family="Times New Roman", size=12)
+
+labels = ['FO','GLCM', 'GLDM', 'GLRLM', 'GLSZM','NGTDM','SHAPE']
+
+featG = np.round((fselected_feat.mean(axis = 1)/15)*100).tolist()
+featG_error  = np.round(fselected_feat.std(axis = 1)).tolist()
+
+
+bar_width = 0.4
+
+colors = sns.color_palette(palette='pastel')
+columns = ['FO','GLCM', 'GLDM', 'GLRLM', 'GLSZM','NGTDM','SHAPE']
+
+index = np.arange(len(labels))
+fig = plt.figure(figsize=(12,5))
+plt.bar(index, featG, bar_width, yerr=featG_error, label='')
+
+plt.table(cellText=[featG],
+          rowLabels=[''],
+          rowColours=colors,
+          rowLoc = 'center',
+          colLabels=columns,
+          cellLoc='center',
+          edges='closed',
+         loc='bottom')
+
+fig.subplots_adjust(bottom=0)
+plt.ylabel('% ', fontsize = 15)
+plt.xticks([])
+plt.title('feature group)',fontsize = 20)
+plt.grid(False)
+plt.legend(fontsize = 14, loc = 'upper right')
+plt.rcParams['figure.facecolor'] = 'white'
+
+
+
+plt.show()
+
+
+# In[ ]:
+
+
+# Set styles
+plt.style.use(['seaborn-paper', 'seaborn-whitegrid'])
+plt.style.use(['seaborn'])
+sns.set(palette='deep')
+plt.rc("font", family="Times New Roman", size=12)
+
+labels = ['Original', 'Exponential', 'Gradient', 'LBP','Logarithm',
+          'LoG', 'Square', 'Squareroot', 'Wavelet']
+
+featL  = np.round((flselected_feat.mean(axis = 1)/15)*100).tolist()
+featL_error  = np.round(flselected_feat.std(axis = 1)).tolist()
+
+
+bar_width = 0.4
+
+colors = sns.color_palette(palette='pastel')
+columns = ['Original', 'Exponential', 'Gradient', 'LBP','Logarithm',
+          'LoG', 'Square', 'Squareroot', 'Wavelet']
+
+index = np.arange(len(labels))
+fig = plt.figure(figsize=(12,5))
+plt.bar(index, featL, bar_width,yerr = featL_error, label='')
+# plt.bar(index+bar_width+.02, To, bar_width, yerr = To_error, label = 'Toshiba')
+# plt.bar(index+bar_width+.22, mi, bar_width, yerr = mi_error, label = 'Mix')
+
+plt.table(cellText=[featL],
+          rowLabels=[''],
+          rowColours=colors,
+          rowLoc = 'center',
+          colLabels=columns,
+          cellLoc='center',
+          edges='closed',
+          loc='bottom')
+
+fig.subplots_adjust(bottom=0)
+
+plt.ylabel('% ', fontsize = 15)
+plt.xticks([])
+plt.title('Preprocesing filters',fontsize = 20)
+
+plt.grid(False)
+plt.legend(fontsize = 14, loc = 'upper left')
+plt.rcParams['figure.facecolor'] = 'white'
+plt.show()
+
